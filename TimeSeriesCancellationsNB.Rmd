@@ -1,0 +1,509 @@
+---
+title: "Cancellations TS"
+author: "Bryan Butler"
+date: "7/15/2019"
+output:
+    html_document:
+    toc: false
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, cache.lazy = FALSE)
+```
+
+# <strong>Time Series of Auto Policies</strong> {.tabset .tabset-fade .tabset-pills}
+
+
+<style>
+  .main-container {
+    max-width: 1200px !important;
+    margin-left: auto;
+    margin-right: auto;
+  }
+</style>
+
+
+## Overview of Analysis
+### - Collect data and features on auto polcies (effective starts and cancellations)
+### - Plot and model the series
+### - Use ARIMA/SARIMAX models to backtest and forecast
+### - Try LSTM (neural network model)
+
+
+## Key Findings
+### - Cancellation series is not stationary, but can be modeled using traditional time series approaches
+### - A seasonal differencing model provides a good fit to all of the data as well as a partial cut beginning in 2014
+### - The forecast error of the Patial Model is 11%, 6% for the Full Series
+### - The existing data is valid through 2018, an updated data set would be needed to begin to compare forecasts for 2019
+
+
+```{r, loadPython,echo=FALSE}
+library(reticulate)
+use_condaenv('timeseries')
+
+```
+
+
+
+```{python importLibaries, echo=FALSE}
+
+# Base libraries
+import PyQt5
+import pandas as pd
+from pandas import Series, DataFrame
+from pandas.plotting import lag_plot
+
+
+import numpy as np
+import pyodbc
+
+
+import os
+import math
+from itertools import cycle
+
+
+# plotting libraries
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# get the datetime library for date & time calcs
+from datetime import datetime, timedelta
+
+
+# to visualize all of the columns in the dataframe
+pd.pandas.set_option('display.max_columns', None)
+
+
+from matplotlib.pyplot import figure
+
+
+
+# stats models tools
+import statsmodels.api as sm
+
+
+# Dickey-Fuller test for stationarity
+from statsmodels.tsa.stattools import adfuller
+
+
+# seaonal decomposition
+from statsmodels.tsa.seasonal import seasonal_decompose
+
+
+# for expanding plots
+from pylab import rcParams
+
+
+# creating difference sequences
+from statsmodels.tsa.statespace.tools import diff
+
+
+# correlation plots
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+
+# modeling tools
+from statsmodels.tsa.arima_model import ARMA, ARIMA, ARMAResults, ARIMAResults
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+
+# metrics
+from statsmodels.tools.eval_measures import mse, rmse
+
+
+# ignore harmless warnings
+import warnings
+warnings.filterwarnings('ignore')
+```
+
+
+
+```{python adfTest, echo=FALSE}
+# get the Dickey-Fuller function
+
+
+def adf_test(series,title=''):
+    """
+    Pass in a time series and an optional title, returns an ADF report
+    """
+    print(f'Augmented Dickey-Fuller Test: {title}')
+    result = adfuller(series.dropna(),autolag='AIC') # .dropna() handles differenced data
+    
+    labels = ['ADF test statistic','p-value','# lags used','# observations']
+    out = pd.Series(result[0:4],index=labels)
+
+    for key,val in result[4].items():
+        out[f'critical value ({key})']=val
+        
+    print(out.to_string())          # .to_string() removes the line "dtype: float64"
+    
+    if result[1] <= 0.05:
+        print("Strong evidence against the null hypothesis")
+        print("Reject the null hypothesis")
+        print("Data has no unit root and is stationary")
+    else:
+        print("Weak evidence against the null hypothesis")
+        print("Fail to reject the null hypothesis")
+        print("Data has a unit root and is non-stationary")
+```
+
+
+
+## Get the Data
+### Two aggregated series: New Business and Cancellations
+### Created Full Series and Partial for modeling
+```{python getData}
+
+# create the path for the file
+
+myPath = os.path.join('N:', '\Bryan', 'Retention')
+
+print(myPath)
+
+os.chdir(myPath)
+
+data = pd.read_csv('CombinedCancelNB.csv',index_col='StartDate', parse_dates=True)
+
+# change the column names
+data.columns = ['NewBus', 'Cancellations']
+
+# slice the series
+
+print(f'{len(data)}', "rows in data")
+
+print(data.head())
+
+dataRed = data.iloc[59:].copy()
+
+print(dataRed.head())
+
+print(dataRed.tail())
+
+print(f'{len(dataRed)}', "rows in dataRed")
+
+```
+
+
+
+## Plot the Series
+### - Both New Business and Cancellations have strong trends that impact the series
+### - There is a positive spread between New Business and Cancellations
+### - Room for potential Vector Autoregression model (both series used)
+```{python plotseries}
+# view all of the series
+data.plot(figsize=(16,9), legend=True, title = 'Relationship Between Cancellations and New Customers for Auto')
+plt.show()
+```
+
+
+```{python plotseriesblowup}
+# now blow it up to scale
+
+title = 'Relationship Between Cancellations and New Auto Customers'
+ylabel = 'Counts per Month'
+xlabel = ''
+
+# ax = dataRed['NewBus'].plot(legend=True, figsize=(16,6),title=title)
+# ax1 = dataRed['Cancellations'].plot(legend=True)
+# ax.autoscale(axis='x', tight=True)
+# ax.set(xlabel=xlabel, ylabel=ylabel)
+# plt.show()
+
+dataRed.plot(figsize=(16,9), legend=True, title=title)
+plt.show()
+
+
+
+# get a view 
+print(dataRed['Cancellations'].head(15))
+```
+
+
+## Data Tests
+### ADF tests shows non-stationary need to difference series
+```{python reduceData}
+# cut the data set down
+# start 2014-01-01
+# end 2018-12-01
+
+dataRed['Cancellations'].loc['2014-01-01':'2019-01-31'].head(15)
+# perform adf test
+adf_test(dataRed['Cancellations'])
+```
+
+
+### - Decompose Series
+### - Shows strong trend and seasonality
+### - Residuals appear to be noise after removal of trend and seasonality
+```{python seasonalDecomp}
+# check a multiplicative model
+N, M = 16, 10
+result = seasonal_decompose(dataRed['Cancellations'], model = 'multiplicative')
+rcParams['figure.figsize'] = N,M
+result.plot();
+plt.show();
+plt.clf()
+```
+
+
+### First Difference
+### - ADF test indicates First Difference not stationary
+### - Perform a second difference
+```{python firstDiff}
+# make a first difference
+dataRed['CancDiff_1'] = diff(dataRed['Cancellations'].iloc[0:-1], k_diff=1)
+print(dataRed['CancDiff_1'])
+
+# check the adf on the difference
+adf_test(dataRed['CancDiff_1'])
+
+
+# get a plot of the 1st Diff
+df = dataRed['CancDiff_1']
+ax = df.plot(figsize=(16,9), legend=True, title='1st Difference of Cancellations')
+plt.show(ax=ax)
+```
+
+
+
+### Second Difference
+```{python secondDiff, fig.height=9, fig.width=16}
+# make a second difference
+dataRed['CancDiff_2'] = diff(dataRed['Cancellations'], k_diff=2)
+
+
+# get a plot of the 2nd Diff
+plt.clf()
+ax = dataRed['CancDiff_2'].plot(figsize=(16,9), legend=True, title='1st & 2nd Difference of Cancellations')
+plt.show()
+
+
+```
+
+
+## Correlation Plots
+### - Look at lags of AutoCorrelation (ACF) and Partial Autocorrelation (PACF)
+### - ACF plot shows up to 3 lags may be used
+### - PACF shows key lags: 1, 21 - 30 mos, 33 - 39 mos; 3, 6, or 12 month seasonal component
+```{python corrPlots, fig.height=9, fig.width=16}
+
+# get an acf plot
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_acf(dataRed['Cancellations'], lags=40, ax=ax)
+plt.show()
+
+
+# get an pacf plot
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_pacf(dataRed['Cancellations'], lags=40, ax=ax)
+plt.show()
+
+```
+
+
+## Partial Model
+### Partial Series - starts at 12-31-2013 to reduce impact of trend
+```{python modelSmall, warning=F, message=F, echo=FALSE}
+# first partial model
+
+train = dataRed['Cancellations'].iloc[0:50]
+test = dataRed['Cancellations'].iloc[49:]
+
+print(f'{len(train)}', "rows in train")
+
+print(train.head())
+
+
+print(f'{len(test)}', "rows in test")
+
+print(test)
+```
+
+
+### Seasonal ARIMA
+### Model uses an autoregressive term, 1 difference, and 12 month seasonal component
+```{python seasonalModel, warning=F, message=F}
+model = SARIMAX(train, order=(1,1,0), seasonal_order=(1,1,0,12), enforce_invertibility=True)
+
+results = model.fit()
+
+print(results.summary())
+
+
+start = len(train) - 1
+end = len(train) + len(test) - 2
+
+
+predictions = results.predict(start=start,end=end).rename('SARIMA Model')
+
+print(predictions)
+
+backtest = results.predict(start=1, end=start-1, typ='levels').rename('Backtest Model')
+
+print(backtest)
+
+# make a plot of model fit
+act = pd.DataFrame(train[1:])
+
+
+series_df = pd.concat([act, backtest], axis=1)
+print(series_df.head())
+```
+
+
+### Model is generally a good fit
+### Large spike due to truncated trend
+```{python patialBacktest}
+ax = series_df.plot(figsize=(16,8), legend=True)
+plt.show()
+
+```
+
+
+### Check the Forecast Error - 11.6%
+```{python modelFcast}
+# make a plot of model fit
+
+actual = pd.DataFrame(test)
+print(actual)
+
+compare_df = pd.concat([actual['Cancellations'], predictions], axis=1)
+
+print(compare_df.head())
+
+error = rmse(compare_df['Cancellations'], predictions)
+print(f'{error:.0f}', 'RMSE')
+
+CancMean = compare_df['Cancellations'].mean()
+print(f'{CancMean:.0f}', 'Mean of Cancellations')
+
+percent = error/CancMean*100
+print(f'{percent:.1f}', '% Error')
+
+```
+
+
+
+### Compare Plot
+### Model underforecasts cancellations
+```{python compare}
+plt.clf()
+ax = compare_df.plot(figsize=(16,8), legend=True)
+plt.show()
+```
+
+
+
+## Full Model
+### Model all of the data (including large trend)
+```{python FullModel, echo=FALSE}
+# use the full data series
+
+fcast = len(data) - 12
+print(fcast)
+
+
+# cut to train and test
+
+train = data['Cancellations'].iloc[0:fcast]
+test = data['Cancellations'].iloc[fcast:]
+
+
+print(f'{len(train)}', "rows in train")
+
+print(train.tail())
+
+print(f'{len(test)}', "rows in test")
+
+print(test.head())
+
+```
+
+
+### Build the Mode
+### - 2 Autoregressive lags, second difference, 12 month seasonal component
+```{python BuildFullModel}
+model = SARIMAX(train, order=(2,1,0), seasonal_order=(2,2,0,12), enforce_invertibility=True)
+
+results = model.fit()
+
+print(results.summary())
+
+# set the indices
+start = len(train)
+end = len(train) + len(test) - 1
+
+predictions = results.predict(start=start,end=end).rename('SARIMA Model')
+
+
+backtest = results.predict(start=1, end=start-1, typ='levels').rename('Backtest Model')
+
+```
+
+### Plot the Full Model
+### - Model has very good fit over the series
+```{python plotFit}
+# make a plot of model fit
+act = pd.DataFrame(train[1:])
+
+act_df = pd.concat([act, backtest], axis=1)
+
+print(act_df.head())
+
+act_df = pd.DataFrame(act_df)
+
+plt.clf()
+ax = act_df.plot(figsize=(16,8), legend=True)
+plt.show()
+
+
+```
+
+
+### Predictions
+### - Prediction error 6%
+```{python FullPredictions}
+
+# make a plot of model fit
+
+actual = pd.DataFrame(test)
+
+compare_df = pd.concat([actual['Cancellations'], predictions], axis=1)
+
+print(compare_df.head())
+
+error = rmse(compare_df['Cancellations'], predictions)
+print(f'{error:.0f}', 'RMSE')
+
+CancMean = compare_df['Cancellations'].mean()
+print(f'{CancMean:.0f}', 'Mean of Cancellations')
+
+percent = error/CancMean*100
+print(f'{percent:.1f}', '% Error')
+```
+
+
+### Plot Predictions
+### - Better fit than partial model
+### - Still slightly underforcasting cancellations
+```{python plotFullPredictions}
+
+# make the plot
+
+compare_df = pd.DataFrame(compare_df)
+
+ax = compare_df.plot(figsize=(16,8), legend=True)
+plt.show()
+
+```
+
+
+## Next Steps
+### LSTM deep learning model
+### Individual States
+### Vector Autoregressive Model (Home and Auto, New Bus vs Cancellations)

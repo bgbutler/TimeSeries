@@ -1,0 +1,211 @@
+---
+title: "Cancellations TS"
+author: "Bryan Butler"
+date: "7/1/2019"
+output:
+    html_document:
+    toc: false
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, cache.lazy = FALSE)
+```
+
+# <strong>Time Series of Auto Policies</strong> {.tabset .tabset-fade .tabset-pills}
+
+
+<style>
+  .main-container {
+    max-width: 1200px !important;
+    margin-left: auto;
+    margin-right: auto;
+  }
+</style>
+
+
+## Overview of Analysis
+### - Collect data and features on auto polcies (effective starts and cancellations)
+### - Plot and model the series
+### - Use ARIMA/SARIMAX models to backtest and forecast
+### - Try LSTM (neural network model)
+
+
+## Key Findings
+### - TBD
+
+
+```{r, loadPython}
+library(reticulate)
+use_condaenv('timeseries')
+
+```
+
+
+## Load Python
+```{python importLibaries}
+
+# Base libraries
+import PyQt5
+import pandas as pd
+from pandas import Series, DataFrame
+from pandas.plotting import lag_plot
+
+
+import numpy as np
+import pyodbc
+
+
+import os
+import math
+from itertools import cycle
+
+
+# plotting libraries
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# get the datetime library for date & time calcs
+from datetime import datetime, timedelta
+
+
+# to visualize all of the columns in the dataframe
+pd.pandas.set_option('display.max_columns', None)
+
+
+from matplotlib.pyplot import figure
+
+
+
+# stats models tools
+import statsmodels.api as sm
+
+
+# Dickey-Fuller test for stationarity
+from statsmodels.tsa.stattools import adfuller
+
+
+# seaonal decomposition
+from statsmodels.tsa.seasonal import seasonal_decompose
+
+
+# for expanding plots
+from pylab import rcParams
+
+
+# creating difference sequences
+from statsmodels.tsa.statespace.tools import diff
+
+
+# correlation plots
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+
+# modeling tools
+from statsmodels.tsa.arima_model import ARMA, ARIMA, ARMAResults, ARIMAResults
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+
+# metrics
+from statsmodels.tools.eval_measures import mse, rmse
+
+
+# ignore harmless warnings
+import warnings
+warnings.filterwarnings('ignore')
+```
+
+
+
+## Dickey Fuller Function
+```{python adfTest, echo = T}
+# get the Dickey-Fuller function
+
+
+def adf_test(series,title=''):
+    """
+    Pass in a time series and an optional title, returns an ADF report
+    """
+    print(f'Augmented Dickey-Fuller Test: {title}')
+    result = adfuller(series.dropna(),autolag='AIC') # .dropna() handles differenced data
+    
+    labels = ['ADF test statistic','p-value','# lags used','# observations']
+    out = pd.Series(result[0:4],index=labels)
+
+    for key,val in result[4].items():
+        out[f'critical value ({key})']=val
+        
+    print(out.to_string())          # .to_string() removes the line "dtype: float64"
+    
+    if result[1] <= 0.05:
+        print("Strong evidence against the null hypothesis")
+        print("Reject the null hypothesis")
+        print("Data has no unit root and is stationary")
+    else:
+        print("Weak evidence against the null hypothesis")
+        print("Fail to reject the null hypothesis")
+        print("Data has a unit root and is non-stationary")
+```
+
+
+## Get the Data
+```{python getData}
+
+# create the path for the file
+
+myPath = os.path.join('N:', '\Bryan', 'Retention')
+
+print(myPath)
+
+os.chdir(myPath)
+
+data = pd.read_csv('CombinedCancelNB.csv',index_col='StartDate', parse_dates=True)
+
+# slice the series
+
+print(f'{len(data)}', "rows in data")
+
+print(data.head())
+
+dataRed = data.iloc[59:107].copy()
+
+print(dataRed.head())
+
+print(f'{len(dataRed)}', "rows in dataRed")
+
+```
+
+
+
+## Plot the Series
+```{python plotseries}
+# view all of the series
+data.plot(figsize=(16,9), legend=True, title = 'Relationship Between Cancellations and New Customers for Auto')
+plt.show()
+```
+
+
+```{python plotseriesblowup}
+# now blow it up to scale
+
+title = 'Relationship Between Cancellations and New Auto Customers'
+ylabel = 'Counts per Month'
+xlabel = ''
+
+# ax = dataRed['NewBus'].plot(legend=True, figsize=(16,6),title=title)
+# ax1 = dataRed['Cancellations'].plot(legend=True)
+# ax.autoscale(axis='x', tight=True)
+# ax.set(xlabel=xlabel, ylabel=ylabel)
+# plt.show()
+
+dataRed.plot(figsize=(16,9), legend=True, title=title)
+plt.show()
+
+
+
+# get a view 
+print(dataRed['Cancellations'].head(15))
+```
+
+
