@@ -1,0 +1,321 @@
+---
+title: "IL Default Switch V2"
+author: "Bryan Butler"
+date: "May 17, 2019"
+output:
+    html_document:
+    toc: false
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, cache.lazy = FALSE)
+```
+
+# <strong>IL Default Paperless Setting Impact</strong> {.tabset .tabset-fade .tabset-pills}
+
+
+<style>
+  .main-container {
+    max-width: 1200px !important;
+    margin-left: auto;
+    margin-right: auto;
+  }
+</style>
+
+
+## Overview of Analysis
+### - Utilise IL Pre-Registration and Enrollments
+### - Model the past up to February; generates existing run rate
+### - Forecast March and April using existing run rate
+### - Compare to actual change after the default setting changed
+
+
+## Key Findings
+### - Despite limited data able to make reasonable models of IL Pre-Registrations and Enrollments
+#### - Error rate of fit is 16 - 17%
+### - Using the model, we projected out the March and April values as if no change to the default setting occurred
+### - For both series, the change in default significantly altered the March and April counts
+
+
+
+```{r, loadPython}
+library(reticulate)
+use_condaenv('timeseries')
+
+```
+
+
+
+## Load Python
+```{python}
+import PyQt5
+import pandas as pd
+from pandas.plotting import lag_plot
+
+
+import numpy as np
+import os
+
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import figure
+
+import statsmodels.api as sm
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.arima_model import ARMA, ARIMA, ARMAResults, ARIMAResults
+
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.statespace.tools import diff
+
+from statsmodels.tools.eval_measures import rmse
+
+# ignore harmless warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+```
+
+
+## Dickey Fuller Function
+```{python, echo = T}
+# get the Dickey-Fuller function
+
+
+from statsmodels.tsa.stattools import adfuller
+
+def adf_test(series,title=''):
+    """
+    Pass in a time series and an optional title, returns an ADF report
+    """
+    print(f'Augmented Dickey-Fuller Test: {title}')
+    result = adfuller(series.dropna(),autolag='AIC') # .dropna() handles differenced data
+    
+    labels = ['ADF test statistic','p-value','# lags used','# observations']
+    out = pd.Series(result[0:4],index=labels)
+
+    for key,val in result[4].items():
+        out[f'critical value ({key})']=val
+        
+    print(out.to_string())          # .to_string() removes the line "dtype: float64"
+    
+    if result[1] <= 0.05:
+        print("Strong evidence against the null hypothesis")
+        print("Reject the null hypothesis")
+        print("Data has no unit root and is stationary")
+    else:
+        print("Weak evidence against the null hypothesis")
+        print("Fail to reject the null hypothesis")
+        print("Data has a unit root and is non-stationary")
+```
+
+
+
+## Get the Data
+```{python}
+os.chdir('/Users/Bryan/Documents/Programming/useR')
+os.getcwd()
+```
+
+
+```{python}
+# load the data create the index for dates
+
+df = pd.read_csv('IL_Registrations.csv', index_col='Date', parse_dates=True)
+df.index = pd.to_datetime(df.index, dayfirst=True)
+
+# set up for monthly
+df.index.freq = 'MS'
+
+df.head()
+```
+
+
+
+## Plot the Series
+```{python plotseries}
+# view all of the series
+ax = df.plot(figsize=(16,9), legend=True, title='Pre Registrations and Enrollments')
+plt.show()
+```
+
+
+### adf test
+```{python adf1}
+adf_test(df['IL_Pre_Reg'])
+```
+
+
+## Reduce the Series and Plot
+```{python plotreduced}
+dfRed = df.iloc[1:12].copy()
+ax = dfRed.plot(figsize=(16,9), legend=True, title='Plot of Reduced Data Set')
+plt.show()
+```
+
+
+## Separate IL Data Only
+```{python il}
+# separate the IL data
+IL = df[['IL_Pre_Reg', 'IL_Enroll']]
+
+
+# remove the ends
+ILred = IL.iloc[1:12]
+
+print(ILred.head())
+
+ax = ILred.plot(figsize=(16,6), legend=True)
+plt.show()
+```
+
+
+### ADF Test on Pre-Registrations
+```{python}
+adf_test(ILred['IL_Pre_Reg'])
+```
+
+
+### ADF Test on Enrollments
+```{python}
+# adf test
+adf_test(ILred['IL_Enroll'])
+```
+
+
+## Correlations - ACF and PACF
+### Pre-Registrations
+```{python, echo=F}
+# check the ACF of Pre-Registrations
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_acf(ILred['IL_Pre_Reg'], lags=10, ax=ax)
+plt.show()
+
+
+# check PACF of Pre Registsrations
+
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_pacf(ILred['IL_Pre_Reg'], lags=10, ax=ax)
+plt.show()
+```
+
+
+### Enrollments
+```{python, echo=F}
+# check the ACF of Pre-Enrollments
+
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_acf(ILred['IL_Enroll'], lags=10, ax=ax)
+plt.show()
+
+
+# check the PACF of Pre-Enrollments
+
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_pacf(ILred['IL_Enroll'], lags=10, ax=ax)
+plt.show()
+
+
+```
+
+
+
+
+## Model PreRegistrations
+```{python}
+# split pre-reg
+
+train = ILred['IL_Pre_Reg'].iloc[0:9]
+test = ILred['IL_Pre_Reg'].iloc[9:]
+```
+
+
+```{python}
+# select 0,1,1 for order
+
+model = ARIMA(train, order=(0,1,1))
+results = model.fit()
+print(results.summary())
+
+start = len(train)
+end = len(train) + len(test) - 1
+
+predictions = results.predict(start=start, end=end, typ='levels').rename('Modeled Run_Rate')
+
+
+backtest = results.predict(start=1, end=start-1, typ='levels').rename('Modeled Run_Rate')
+```
+
+
+### Check Error
+```{python}
+error = rmse(train[1:], backtest)
+print(error)
+
+percent = error/train.mean()
+print(percent)
+```
+
+
+### Comparison of Modeled, Actual and Forecasted for Pre-Registrations
+```{python}
+reg = ILred['IL_Pre_Reg'].copy()
+dfreg = pd.concat([reg, backtest], axis = 1)
+
+ax = dfreg.plot(figsize=(16,8), legend = True)
+ax1 = predictions.plot(legend=True)
+plt.show()
+
+
+```
+
+
+## Enrollments
+```{python}
+# split enrollements
+train = ILred['IL_Enroll'].iloc[0:9]
+test = ILred['IL_Enroll'].iloc[9:]
+
+# select 3,0,0 for order
+
+model = ARIMA(train, order=(3,0,0))
+results = model.fit()
+print(results.summary())
+
+
+start = len(train)
+end = len(train) + len(test) - 1
+
+predictions = results.predict(start=start, end=end).rename('Enrollment Run Rate')
+
+error = rmse(train[1:9], backtest)
+print(error)
+
+percent = error/train.mean()
+print(percent)
+
+
+backtest = results.predict(start=1, end=start-1).rename('Modeled Enrollments')
+```
+
+
+### Comparison of Modeled, Actual and Forecasted for Enrollments
+```{python}
+# make a plot of model fit
+act = ILred['IL_Enroll'].copy()
+dfenroll = pd.concat([act, backtest], axis = 1)
+
+ax = dfenroll.plot(figsize=(16,8), legend = True)
+ax1 = predictions.plot(legend=True)
+plt.show()
+```
+
+
+
+
+

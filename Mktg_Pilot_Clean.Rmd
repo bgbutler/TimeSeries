@@ -1,0 +1,309 @@
+---
+title: "Marketing Pilot"
+author: "Bryan Butler"
+date: "May 17, 2019"
+output:
+    html_document:
+    toc: false
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, cache.lazy = FALSE, error=T)
+```
+
+# <strong>Impacts of Marketing Campaign</strong> {.tabset .tabset-fade .tabset-pills}
+
+
+<style>
+  .main-container {
+    max-width: 1200px !important;
+    margin-left: auto;
+    margin-right: auto;
+  }
+</style>
+
+
+## Overview of Analysis
+### - Test impact of change in marketing plan
+### - Pilot marketing campaign, will it change email opens
+### - Model the past up to February; generates existing run rate
+### - Forecast March and April using existing run rate
+### - Compare to actual change after the marketing pilot
+
+
+## Key Findings
+### - Despite limited data able to make reasonable models of email opens
+#### - Error rate of fit is 16 - 17%
+### - Using the model, we projected out the March and April values as if no change to the default setting occurred
+### - For the opens, the marketing pilot altered the March and April counts by significant amounts
+
+
+
+```{r, loadPython, echo=F}
+library(reticulate)
+use_condaenv('timeseries')
+```
+
+
+
+
+```{python, echo=F}
+import PyQt5
+import pandas as pd
+from pandas.plotting import lag_plot
+
+
+import numpy as np
+import os
+
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import figure
+
+import statsmodels.api as sm
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.arima_model import ARMA, ARIMA, ARMAResults, ARIMAResults
+
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.statespace.tools import diff
+
+from statsmodels.tools.eval_measures import rmse
+
+# ignore harmless warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# get the Dickey-Fuller function
+from statsmodels.tsa.stattools import adfuller
+
+def adf_test(series,title=''):
+    """
+    Pass in a time series and an optional title, returns an ADF report
+    """
+    print(f'Augmented Dickey-Fuller Test: {title}')
+    result = adfuller(series.dropna(),autolag='AIC') # .dropna() handles differenced data
+    
+    labels = ['ADF test statistic','p-value','# lags used','# observations']
+    out = pd.Series(result[0:4],index=labels)
+
+    for key,val in result[4].items():
+        out[f'critical value ({key})']=val
+        
+    print(out.to_string())          # .to_string() removes the line "dtype: float64"
+    
+    if result[1] <= 0.05:
+        print("Strong evidence against the null hypothesis")
+        print("Reject the null hypothesis")
+        print("Data has no unit root and is stationary")
+    else:
+        print("Weak evidence against the null hypothesis")
+        print("Fail to reject the null hypothesis")
+        print("Data has a unit root and is non-stationary")
+
+
+
+# get the data
+os.chdir('/Users/Bryan/Documents/Programming/useR')
+# os.getcwd()
+```
+
+
+```{python, echo=F}
+# load the data create the index for dates
+
+df = pd.read_csv('Subscriptions.csv', index_col='Date', parse_dates=True)
+df.index = pd.to_datetime(df.index, dayfirst=True)
+
+# set up for monthly
+df.index.freq = 'MS'
+
+# df.head()
+```
+
+
+
+## Series Plots
+```{python plotseries, echo=F}
+# view all of the series
+ax = df.plot(figsize=(16,9), legend=True, title='Email Opens and Joins')
+plt.show()
+```
+
+
+
+```{python adf1, echo=F}
+# adf_test(df['Opens'])
+```
+
+
+## Drop First Value
+### Remove impact of starting up on the series
+```{python plotreduced, echo=F}
+dfRed = df.iloc[1:12].copy()
+ax = dfRed.plot(figsize=(16,9), legend=True, title='Plot of Reduced Data Set')
+plt.show()
+```
+
+
+## Key Series - Opens & Joiners
+```{python dataRed, echo=F}
+# separate the key data
+data = df[['Opens', 'Joiners']]
+
+
+# remove the ends
+data_red = data.iloc[1:12]
+
+# print(data_red.head())
+
+ax = data_red.plot(figsize=(16,6), legend=True)
+plt.show()
+
+
+
+# ADF Test on Opens
+# adf_test(data_red['Opens'])
+
+
+
+### ADF Test on Joiners
+# adf test
+# adf_test(data_red['Joiners'])
+
+
+
+## Correlations - ACF and PACF
+### Opens show first lag strongly correlated
+### PACF shows some seasonality with past lags
+#```{python, echo=F}
+# check the ACF of Opens
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+plot_acf(data_red['Opens'], lags=10, ax=ax)
+# plt.show()
+
+
+# check PACF of Pre Registsrations
+
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+# plot_pacf(data_red['Opens'], lags=10, ax=ax)
+# plt.show()
+
+
+
+### Joiners 
+#```{python, echo=F}
+# check the ACF of Joiners
+
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+# plot_acf(data_red['Joiners'], lags=10, ax=ax)
+# plt.show()
+
+
+# check the PACF of Joiners
+
+N, M = 12, 6
+fig, ax = plt.subplots(figsize=(N, M))
+# plot_pacf(data_red['Joiners'], lags=10, ax=ax)
+# plt.show()
+
+
+```
+
+
+
+
+## Opens Model
+```{python, echo=F}
+# split pre-reg
+
+train = data_red['Opens'].iloc[0:9]
+test = data_red['Opens'].iloc[9:]
+```
+
+
+```{python, echo=F}
+# select 0,1,1 for order
+
+model = ARIMA(train, order=(0,1,1))
+results = model.fit()
+# print(results.summary())
+
+start = len(train)
+end = len(train) + len(test) - 1
+
+predictions = results.predict(start=start, end=end, typ='levels').rename('Modeled Run_Rate')
+
+
+backtest = results.predict(start=1, end=start-1, typ='levels').rename('Modeled Run_Rate')
+```
+
+
+### Check Error
+```{python, echo=F}
+error = rmse(train[1:], backtest)
+f"Error: {error:.2f}"
+
+percent = error/train.mean()
+f"Percent Error: {100 * percent:.2f}%"
+```
+
+
+### Comparison of Modeled, Actual and Forecasted for Opens
+```{python, echo=F}
+reg = data_red['Opens'].copy()
+dfreg = pd.concat([reg, backtest], axis = 1)
+
+ax = dfreg.plot(figsize=(16,8), legend = True)
+ax1 = predictions.plot(legend=True)
+plt.show()
+
+
+```
+
+## Joiners Model
+```{python, echo=F}
+# split enrollements
+train_j = data_red['Joiners'].iloc[0:9]
+test = data_red['Joiners'].iloc[9:]
+
+# select 3,0,0 for order
+
+model = ARIMA(train_j, order=(3,0,0))
+results = model.fit()
+# print(results.summary())
+
+
+start = len(train_j)
+end = len(train_j) + len(test) - 1
+
+predictions = results.predict(start=start, end=end).rename('Joiners Run Rate')
+backtest = results.predict(start=1, end=start-1).rename('Modeled Joiners')
+
+error = rmse(train_j[1:9], backtest)
+f"Error: {error:.2f}"
+
+percent = error/train_j.mean()
+f"Percent Error: {100 * percent:.2f}%"
+
+```
+
+
+### Comparison of Modeled, Actual and Forecasted for Joiners
+```{python, echo=F}
+# make a plot of model fit
+act = data_red['Joiners'].copy()
+dfenroll = pd.concat([act, backtest], axis = 1)
+
+ax = dfenroll.plot(figsize=(16,8), legend = True)
+ax1 = predictions.plot(legend=True)
+plt.show()
+```
+
+
+

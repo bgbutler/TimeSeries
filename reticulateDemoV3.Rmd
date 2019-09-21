@@ -1,0 +1,518 @@
+---
+title: "  "
+author: "Bryan Butler"
+date: "September Boston useR Meetup"
+output:
+    html_document:
+    toc: false
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, cache.lazy = FALSE, error = TRUE)
+```
+
+# <strong>The Reticulate Package</strong> {.tabset .tabset-fade .tabset-pills}
+
+
+## About Me
+![](/Users/Bryan/Documents/Programming/useR/comic.png)
+
+### <strong>Most direct route to Data Science :-)</strong><br>
+### - BS in Applied Science from US Coast Guard Academy; studed heavy metals in surface waters
+### - MS in Chemisry researching organometallic semiconductors
+### - MBA in Finance
+### - Spent most of my career in modeling hurricanes, earthquakes, terrorism and other catastrophes in the insurance industry (mostly referred to as predictive modeling)
+### - Also worked in banking, marketing, and insuretech
+
+
+
+## Corporate Silos - Problem
+### - Most corporations are sad silos
+![](/Users/Bryan/Documents/Programming/useR/Sad_Cubicles_2.png)
+
+
+## Primary Tool
+### - R Markdown and reticulate power a new way forward
+![](/Users/Bryan/Documents/Programming/useR/rmarkdown_wizards.png)
+
+
+## Overview
+### - Jupyter Notebook problem - (what got me to try reticulate)
+### - Wrapping Python in R Markdown for time series work, take advantage of key functions in R Markdown
+### - Writing Python in the reticulate syntax
+### - RNN time series model
+### - Bonus
+
+
+## Reticulate
+### - R library that allows for writing Python code in RStudio
+### *<font color="blue">Option A</font><br>*
+
+### - Write pure Python code in R Markdown to generate cleaner visuals than Jupyter Notebook
+### *<font color="blue">Option B</font><br>*
+### - Integrate Python and R libraries using R syntax
+### - Slight change to using '$' in place of the "." for Python
+### - Can use both Python and R libraries interchangeably
+
+### *<font color="blue">Option C</font><br>*
+### - Use the R Notebook which runs off R Markdown
+
+## Reticulate Tips
+### - Must have a virtual environment to call use_condaenv('base') does not work
+### - For imports make R objects:  pd <- import('pandas')
+### - Use the "$ in place of the ".", when you hover, it shows the methods available
+### - Need to use the print() command more, same for using Python in R Markdown; cannot just call the object
+
+## Plotting
+### - There is no command %inline for Matplotlib
+### - The library PyQt5 is needed for plotting (provides support for UI and browsers)
+### - Sometimes you need to add plt.clf() before a plot to clear Matplotlib out
+### - The syntax differs from Jupyter to R Markdown, need to assign the plotting components (example that I wrote for a person's question on Stackoverflow)
+![](/Users/Bryan/Documents/Programming/useR/plottingR.png)
+
+
+
+## Better Plotting Option
+### - Probably easier to do complex plots with
+### - Matplotlib takes more lines of code and has some requirements when working Python in R Markdown
+![](/Users/Bryan/Documents/Programming/useR/ggplot2_masterpiece.png)
+
+
+
+## Example 1
+```{r, loadR}
+library(reticulate)
+library(ggplot2)
+library(reshape2)
+library(zoo)
+library(knitr)
+
+use_condaenv('pytorch')
+
+# use this theme for any ggplots
+mypal <- c('darkgreen', 'grey', 'blue', 'orange')
+theme_bryan <- function () { 
+  theme(axis.text.x = element_text(size = 12, color = 'darkgreen', angle = 0),
+        legend.position = 'bottom',
+        axis.text.y = element_text(size=12, color = 'darkgreen'),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        strip.text.x = element_text(color='white', size = 10, face = 'bold'),
+        strip.background = element_rect(fill = 'darkgreen'))
+}
+
+
+```
+
+
+### Now Load the Python Libraries
+### - This makes them R objects
+```{r loadPython}
+# import the python libraries
+pd <- import('pandas')
+np <- import('numpy')
+os <- import('os')
+```
+
+
+### Load Data
+### - Take advantage of index_col in Pandas
+### - This is executing Python in R
+### - Switch the '.' in Python for '$'
+```{r getFile}
+
+# check the directory
+os$getcwd()
+os$chdir("/Users/Bryan/Documents/Programming/useR")
+
+
+# get the file
+# load the data create the index for dates
+df = pd$read_csv('Subscriptions.csv', index_col='Date', parse_dates=TRUE)
+df$index = pd$to_datetime(df$index, dayfirst=T)
+
+print(head(df))
+```
+
+
+
+## Plotting Examples
+```{r plots}
+# get the dates from the index
+Dates <- as.Date(rownames(df), format = '%Y-%m-%d')
+
+# make a separate column
+df <- cbind(df, Dates)
+
+
+# melt for plotting
+meltDf <- melt(df, id.var='Dates')
+```
+
+
+### Simple Plot
+```{r plot1, echo=T, warning=F, fig.height=10, fig.width=12, message=F}
+g <- ggplot(meltDf, aes(x=Dates, y=value, col=variable)) + 
+    geom_line(size = 1.5) + 
+    scale_fill_manual(values = mypal, aesthetics = c("colour", "fill")) +
+    theme_bryan()
+g
+```
+
+
+### Facet Plot
+```{r plot2, echo=T, warning=F, fig.height=10, fig.width=12, message=F}
+g <- ggplot(meltDf, aes(x=Dates, y=value, col=variable)) + 
+    geom_line(size = 1.5) + 
+    scale_fill_manual(values = mypal, aesthetics = c("colour", "fill")) +
+    theme_bryan() + 
+    facet_wrap(~variable, ncol = 2, scales = 'free')
+g
+```
+
+
+### Similar Plot (in Python)
+### - Requires much more code
+```{python plot}
+import PyQt5
+import numpy as np
+import pandas as pd
+import os
+
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import figure
+
+data = pd.read_csv('Subscriptions.csv',index_col='Date', parse_dates=True)
+
+# make the nice plot
+
+# set the figure size
+fig = plt.figure(figsize = (15,10))
+
+# the series
+ax1 = fig.add_subplot(211)
+ax1.plot(data.index.values, data.Opens, color = 'green', label = 'Opens')
+
+# plot the legend for the first plot
+ax1.legend(loc = 'upper right', fontsize = 14)
+
+plt.ylabel('Opens', fontsize=16)
+
+# Hide the top x axis
+ax1.axes.get_xaxis().set_visible(False)
+
+#######  NOW PLOT THE OTHER SERIES ON A SINGLE PLOT
+
+# plot 212 is the MI series
+
+# plot series
+ax2 = fig.add_subplot(212)
+ax2.plot(data.index.values, data.Joiners, color = 'orange', label = 'Joiners')
+
+# plot the legend for the second plot
+ax2.legend(loc = 'upper right', fontsize = 14)
+
+# set the fontsize for the bottom plot
+plt.ylabel('Joiners', fontsize=16)
+
+
+plt.tight_layout()
+plt.show()
+```
+
+### Using Matplotlib
+### - Run R code, but create Python Objects
+```{r seasonaldecomp, warning=F, fig.height=10, fig.width=12, message=F}
+# import key libraries
+sm <- import('statsmodels.tsa.seasonal', convert = FALSE)
+mpl <- import('matplotlib')
+plt <- import('matplotlib.pyplot', convert = TRUE)
+pd <- import('pandas', convert = FALSE)
+
+
+# get the data and keep it as a pandas object
+setwd("/Users/Bryan/Documents/Programming/useR")
+df <- pd$read_csv('Alcohol_Sales.csv', index_col='DATE', parse_dates=TRUE)
+df$index$freq = 'MS'
+df$columns <- list('Sales')
+
+# seasonal decompose
+result <- sm$seasonal_decompose(df$Sales)
+
+# make all three plots
+ax1 <- result$plot()
+plt$savefig('SeasDecomp.png')
+
+# get the seasonal component only
+plt$clf()
+ax2 = result$seasonal$plot(figsize = c(12,8))
+plt$savefig('seasonal.png')
+
+
+
+```
+### Seasonal Decomposition Plot
+![](/Users/Bryan/Documents/Programming/useR/SeasDecomp.png)
+
+
+### Seasonal Component only
+![](/Users/Bryan/Documents/Programming/useR/seasonal.png)
+
+
+
+
+
+
+
+
+
+## Example 2
+### RNN using Keras and Tensorflow
+### Imports For Basics
+### Needs PyQt5 to do plotting
+```{python imports}
+# need PyQt5 for plotting
+import PyQt5
+
+# import the base libraries
+import pandas as pd
+import numpy as np
+from pandas import Series, DataFrame
+import os
+import math
+from itertools import cycle
+
+# plotting libraries
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# get the datetime library for date & time calcs
+from datetime import datetime, timedelta
+```
+
+
+
+### Specialized Imports
+### Libraries for timeseries and deep learning
+### Could use the R version of Keras package with tensorflow
+```{python keraslibs}
+# import modeling tools
+
+from statsmodels.tools.eval_measures import mse, rmse
+
+from statsmodels.tsa.seasonal import seasonal_decompose
+from pylab import rcParams
+
+# need to scale data to 0 - 1 
+from sklearn.preprocessing import MinMaxScaler
+
+# get the deep learning components
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+
+# use the preprocessing time series generator
+from keras.preprocessing.sequence import TimeseriesGenerator
+
+import random
+
+random.seed(1000)
+```
+
+
+
+
+
+
+### Get the Data
+```{python}
+os.chdir('/Users/Bryan/Documents/Programming/useR')
+os.getcwd()
+
+
+df = pd.read_csv('Alcohol_Sales.csv', index_col='DATE', parse_dates=True)
+df.index.freq = 'MS'
+df.head()
+
+# get a view of the data
+df.columns = ['Sales']
+df.plot(figsize=(16,8))
+
+
+from statsmodels.tsa.seasonal import seasonal_decompose
+result = seasonal_decompose(df['Sales'])
+
+rcParams['figure.figsize'] = 16,10
+result.plot()
+
+result.seasonal.plot(figsize=(12,8))
+
+
+# nobs = number of observations to forecast
+nobs = 12
+
+train = df.iloc[:-nobs]
+test = df.iloc[-nobs:]
+
+len(test)
+```
+
+
+
+```{python model, echo=F}
+# need to scale data to 0 - 1 
+from sklearn.preprocessing import MinMaxScaler
+
+# find the max is the fit and dividing by max is transform
+scaler = MinMaxScaler()
+
+scaler.fit(train) #find the max value
+
+scaled_train = scaler.transform(train)
+scaled_test = scaler.transform(test)
+
+print(scaled_test)
+
+
+
+# n_input is the number of 'lags' to use as inputs to use for next time step
+# batch size will cut the data set down
+n_input = 12
+n_features = 1
+
+train_generator = TimeseriesGenerator(scaled_train, scaled_train, length=n_input, batch_size=1)
+
+# build the model
+model = Sequential()
+model.add(LSTM(150, activation='relu', input_shape=(n_input, n_features)))
+model.add(Dense(1))
+model.compile(optimizer='adam', loss='mse')
+
+print(model.summary)
+
+model.fit_generator(train_generator, epochs=25)
+```
+
+
+```{python lossFunction}
+plt.clf()
+plt.plot(range(len(model.history.history['loss'])), model.history.history['loss'])
+```
+
+
+```{python forecasts}
+first_eval_batch = scaled_train[-12:]
+
+first_eval_batch = first_eval_batch.reshape((1,n_input, n_features))
+model.predict(first_eval_batch)
+
+# holding predictions in empty list
+test_predictions = []
+
+
+# last n_inputs from the training set
+first_eval_batch = scaled_train[-n_input:]
+
+current_batch = first_eval_batch.reshape((1,n_input, n_features))
+
+# how far into the future to forecast
+# set to length of test set
+# can change the range and go into the future
+for i in range(len(test)):
+    
+    # one time step ahead of historical 12 points
+    current_pred = model.predict(current_batch)[0]
+    
+    # store in prediction
+    test_predictions.append(current_pred)
+    
+    # UPDATE current batch to include prediction
+    # dropping first and adding the prediction
+    current_batch = np.append(current_batch[:,1:,:], [[current_pred]], axis = 1)
+    
+    
+    
+    
+print(test_predictions)
+# invert the scaling 
+true_predictions = scaler.inverse_transform(test_predictions)
+
+test['Predictions'] = true_predictions
+print(test)
+
+
+test.plot(figsize=(12,8))
+
+
+```
+
+
+
+```{python evaluate}
+error = rmse(test['Sales'], test['Predictions'])
+print(f'{error:.0f}', 'RMSE')
+
+SalesMean = test['Sales'].mean()
+print(f'{SalesMean:.0f}', 'Mean of Sales')
+
+percent = error/SalesMean*100
+print(f'{percent:.1f}', '% Error')
+
+```
+
+
+
+## Bonus
+### Alternate framework for deep learning
+### Follows a Numpy syntax
+```{python pytorch}
+# import key libraries
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.optim as optim
+import torch.utils.data
+from torch.autograd import Variable
+```
+
+
+```{python helper}
+def describe(x):
+    print("Type: {}".format(x.type()))
+    print("Shape/size: {}".format(x.shape))
+    print("Values: \n{}".format(x))
+    
+describe(torch.rand(2,3))
+```
+
+
+### More Tensor Operations
+```{python torchexample}
+
+describe(torch.zeros(2,3))
+x = torch.ones(2,3)
+describe(x)
+x.fill_(5)
+describe(x)
+
+```
+
+
+
+
+
+## Final Result
+### Get everyone working together
+![](/Users/Bryan/Documents/Programming/useR/Office-R-github.png)
+
+
+
+## Credit
+![](/Users/Bryan/Documents/Programming/useR/Art_Allison_Horst.png)
+
+
+
